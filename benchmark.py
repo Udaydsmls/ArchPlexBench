@@ -11,23 +11,28 @@ from evaluate import compute_perplexity
 from train import train_model
 
 CONFIGS = [
-    "configs/transformer.yaml",
+    "configs/transformer_decoder.yaml",
+    "configs/encoder_decoder.yaml",
     "configs/lstm.yaml",
+    "configs/xlstm.yaml",
     "configs/mamba.yaml",
+    "configs/mamba_multihead.yaml",
 ]
 
 
 def _plot(df):
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    colors = ["#4C72B0", "#DD8452", "#55A868"]
+    colors = list(plt.cm.tab10.colors[: len(df)])
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
     axes[0].bar(df["model"], df["test_ppl"], color=colors)
     axes[0].set_title("Test Perplexity (lower is better)")
     axes[0].set_ylabel("Perplexity")
+    axes[0].tick_params(axis="x", rotation=20)
 
     axes[1].bar(df["model"], df["params_M"], color=colors)
     axes[1].set_title("Trainable Parameters (M)")
     axes[1].set_ylabel("Millions")
+    axes[1].tick_params(axis="x", rotation=20)
 
     plt.tight_layout()
     os.makedirs("results", exist_ok=True)
@@ -67,7 +72,7 @@ def run_benchmark(epochs=20, lr=3e-4, batch_size=32, seq_len=256):
     os.makedirs("results", exist_ok=True)
     df.to_csv("results/benchmark.csv", index=False)
 
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print(df.to_string(index=False))
 
     _plot(df)

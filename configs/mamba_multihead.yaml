@@ -1,0 +1,7 @@
+model: mamba_multihead
+d_model: 256
+n_layers: 4
+d_state: 16
+d_conv: 4
+n_heads: 6
+dropout: 0.1
