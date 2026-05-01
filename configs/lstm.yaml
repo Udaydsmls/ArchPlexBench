@@ -1,5 +1,5 @@
 model: lstm
 embed_dim: 256
-hidden_dim: 1024
-n_layers: 2
+hidden_dim: 256
+n_layers: 3
 dropout: 0.5
