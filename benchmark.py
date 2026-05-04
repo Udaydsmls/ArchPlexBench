@@ -14,7 +14,6 @@ CONFIGS = [
     "configs/transformer_decoder.yaml",
     "configs/encoder_decoder.yaml",
     "configs/lstm.yaml",
-    "configs/xlstm.yaml",
     "configs/mamba.yaml",
     "configs/mamba_multihead.yaml",
 ]
