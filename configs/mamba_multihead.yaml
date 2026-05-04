@@ -1,6 +1,6 @@
 model: mamba_multihead
-d_model: 256
-n_layers: 4
+d_model: 96
+n_layers: 18
 d_state: 16
 d_conv: 4
 n_heads: 6
