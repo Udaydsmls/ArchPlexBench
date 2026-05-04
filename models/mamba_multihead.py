@@ -51,18 +51,16 @@ class SelectiveSSM(nn.Module):
         B_heads = torch.stack([proj(x_conv) for proj in self.B_proj], dim=2)  # (B, T, P, N)
         C_heads = torch.stack([proj(x_conv) for proj in self.C_proj], dim=2)  # (B, T, P, N)
 
-        h = x.new_zeros(B, D, P, N)
-        ys = []
-        for t in range(T):
-            dt_t = dt[:, t, :, None, None]                      # (B, D, 1, 1)
-            dA = torch.exp(A[None] * dt_t)                      # (B, D, P, N)
-            dB = dt_t * B_heads[:, t].unsqueeze(1)              # (B, D, P, N)
-            u_t = x_conv[:, t, :, None, None]                   # (B, D, 1, 1)
-            h = h * dA + u_t * dB
-            y_heads = (h * C_heads[:, t].unsqueeze(1)).sum(-1)  # (B, D, P)
-            ys.append((y_heads * self.head_mix[None]).sum(-1))  # (B, D)
+        dt_e = dt[:, :, :, None, None]                          # (B, T, D, 1, 1)
+        dA = torch.exp(A[None, None] * dt_e)                    # (B, T, D, P, N)
+        dB = dt_e * B_heads[:, :, None, :, :]                   # (B, T, D, P, N)
 
-        y = torch.stack(ys, dim=1)                              # (B, T, D)
+        h = x.new_zeros(B, D, P, N)
+        y = x.new_zeros(B, T, D)
+        for t in range(T):
+            h = h * dA[:, t] + x_conv[:, t, :, None, None] * dB[:, t]
+            y_heads = (h * C_heads[:, t].unsqueeze(1)).sum(-1)  # (B, D, P)
+            y[:, t] = (y_heads * self.head_mix[None]).sum(-1)   # (B, D)
         y = y + x_conv * self.D[None, None, :]
         y = y * F.silu(z)
         return self.out_proj(y)

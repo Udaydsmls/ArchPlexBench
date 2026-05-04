@@ -41,12 +41,12 @@ class SelectiveSSM(nn.Module):
         dB = delta.unsqueeze(-1) * B_ssm.unsqueeze(2)
 
         h = x.new_zeros(B, D, self.d_state)
-        ys = []
+        y = x.new_zeros(B, L, D)
         for t in range(L):
             h = dA[:, t] * h + dB[:, t] * x[:, t, :, None]
-            ys.append((h * C[:, t, None, :]).sum(-1))
+            y[:, t] = (h * C[:, t, None, :]).sum(-1)
 
-        return torch.stack(ys, dim=1) + self.D * x
+        return y + self.D * x
 
 
 class MambaBlock(nn.Module):
