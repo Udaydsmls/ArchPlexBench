@@ -1,9 +1,40 @@
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as ckpt
 
-from models.scan import parallel_scan
+
+@torch.compile
+def _ssm_multihead(x_conv, A, dt, B_heads, C_heads, head_mix, D_param):
+    """Fused multi-head SSM kernel: discretization, parallel prefix scan, and
+    head mixing in one compiled region so TorchInductor co-fuses the entire
+    5D elementwise chain instead of stopping at the scan boundary.
+    """
+    dt_e = dt.unsqueeze(-1).unsqueeze(-1)                       # (B, T, D, 1, 1)
+    dA = torch.exp(A * dt_e)                                    # (B, T, D, P, N)
+    dtx_e = (dt * x_conv).unsqueeze(-1).unsqueeze(-1)
+    X = dtx_e * B_heads.unsqueeze(2)                            # (B, T, D, P, N)
+
+    T = dA.shape[1]
+    log_T = math.ceil(math.log2(T)) if T > 1 else 0
+    pad_inner = (0, 0, 0, 0, 0, 0)
+    A_run = dA
+    X_run = X
+    for d in range(log_T):
+        step = 2 ** d
+        if step >= T:
+            break
+        pad_spec = pad_inner + (step, 0)
+        A_prev = F.pad(A_run[:, :-step], pad_spec, value=1.0)
+        X_prev = F.pad(X_run[:, :-step], pad_spec, value=0.0)
+        X_run = A_run * X_prev + X_run
+        A_run = A_run * A_prev
+
+    y_heads = (X_run * C_heads.unsqueeze(2)).sum(-1)            # (B, T, D, P)
+    y = (y_heads * head_mix).sum(-1) + x_conv * D_param         # (B, T, D)
+    return y
 
 
 class SelectiveSSM(nn.Module):
@@ -44,20 +75,11 @@ class SelectiveSSM(nn.Module):
         x_conv = F.silu(x_conv)
 
         dt = F.softplus(self.dt_proj(x_conv))
-        A = -torch.exp(self.A_log)
-
+        A = (-torch.exp(self.A_log))[None, None]                 # (1, 1, D, P, N)
         B_heads = self.B_proj(x_conv).view(B, T, P, N)
         C_heads = self.C_proj(x_conv).view(B, T, P, N)
 
-        dt_e = dt[:, :, :, None, None]                          # (B, T, D, 1, 1)
-        dA = torch.exp(A[None, None] * dt_e)                    # (B, T, D, P, N)
-        dBu = dt_e * B_heads[:, :, None, :, :] * x_conv[:, :, :, None, None]
-
-        h = parallel_scan(dA, dBu)                              # (B, T, D, P, N)
-        y_heads = (h * C_heads[:, :, None, :, :]).sum(-1)        # (B, T, D, P)
-        y = (y_heads * self.head_mix).sum(-1)                    # (B, T, D)
-
-        y = y + x_conv * self.D
+        y = _ssm_multihead(x_conv, A, dt, B_heads, C_heads, self.head_mix, self.D)
         y = y * F.silu(z)
         return self.out_proj(y)
 
