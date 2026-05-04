@@ -3,6 +3,9 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint as ckpt
+
+from models.scan import parallel_scan
 
 
 class SelectiveSSM(nn.Module):
@@ -28,24 +31,17 @@ class SelectiveSSM(nn.Module):
         self.dt_proj.bias = nn.Parameter(dt + torch.log(-torch.expm1(-dt)))
 
     def forward(self, x):
-        B, L, D = x.shape
-
         delta_pre, B_ssm, C = self.x_proj(x).split(
             [self.dt_rank, self.d_state, self.d_state], dim=-1
         )
-
         delta = F.softplus(self.dt_proj(delta_pre))
         A = -torch.exp(self.A_log.float())
 
         dA = torch.exp(delta.unsqueeze(-1) * A)
-        dB = delta.unsqueeze(-1) * B_ssm.unsqueeze(2)
+        dBu = (delta * x).unsqueeze(-1) * B_ssm.unsqueeze(2)
 
-        h = x.new_zeros(B, D, self.d_state)
-        y = x.new_zeros(B, L, D)
-        for t in range(L):
-            h = dA[:, t] * h + dB[:, t] * x[:, t, :, None]
-            y[:, t] = (h * C[:, t, None, :]).sum(-1)
-
+        h = parallel_scan(dA, dBu)
+        y = (h * C[:, :, None, :]).sum(-1)
         return y + self.D * x
 
 
@@ -67,7 +63,7 @@ class MambaBlock(nn.Module):
         self.ssm = SelectiveSSM(d_inner, d_state)
         self.out_proj = nn.Linear(d_inner, d_model, bias=False)
 
-    def forward(self, x):
+    def _forward(self, x):
         residual = x
         xz = self.in_proj(self.norm(x))
         x_branch, z = xz.split(self.d_inner, dim=-1)
@@ -78,6 +74,11 @@ class MambaBlock(nn.Module):
 
         y = self.ssm(x_conv) * F.silu(z)
         return residual + self.out_proj(y)
+
+    def forward(self, x):
+        if self.training:
+            return ckpt.checkpoint(self._forward, x, use_reentrant=False)
+        return self._forward(x)
 
 
 class MambaLM(nn.Module):

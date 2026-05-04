@@ -1,6 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint as ckpt
+
+from models.scan import parallel_scan
 
 
 class SelectiveSSM(nn.Module):
@@ -23,45 +26,38 @@ class SelectiveSSM(nn.Module):
         self.dt_proj = nn.Linear(d_model, d_model, bias=True)
 
         A = torch.arange(1, d_state + 1, dtype=torch.float32)
-        A = A.unsqueeze(0).unsqueeze(0).expand(d_model, n_heads, -1)  # (D, P, N)
+        A = A.unsqueeze(0).unsqueeze(0).expand(d_model, n_heads, -1)
         self.A_log = nn.Parameter(torch.log(A))
         self.D = nn.Parameter(torch.ones(d_model))
 
-        self.B_proj = nn.ModuleList(
-            [nn.Linear(d_model, d_state, bias=False) for _ in range(n_heads)]
-        )
-        self.C_proj = nn.ModuleList(
-            [nn.Linear(d_model, d_state, bias=False) for _ in range(n_heads)]
-        )
+        self.B_proj = nn.Linear(d_model, n_heads * d_state, bias=False)
+        self.C_proj = nn.Linear(d_model, n_heads * d_state, bias=False)
         self.head_mix = nn.Parameter(torch.full((d_model, n_heads), 1.0 / n_heads))
         self.out_proj = nn.Linear(d_model, d_model, bias=False)
 
     def forward(self, x):
-        B, T, D = x.shape
+        B, T, _ = x.shape
         P, N = self.n_heads, self.d_state
 
         x_ssm, z = self.in_proj(x).chunk(2, dim=-1)
-
         x_conv = self.conv1d(x_ssm.transpose(1, 2))[:, :, :T].transpose(1, 2)
         x_conv = F.silu(x_conv)
 
-        dt = F.softplus(self.dt_proj(x_conv))       # (B, T, D)
-        A = -torch.exp(self.A_log)                  # (D, P, N)
+        dt = F.softplus(self.dt_proj(x_conv))
+        A = -torch.exp(self.A_log)
 
-        B_heads = torch.stack([proj(x_conv) for proj in self.B_proj], dim=2)  # (B, T, P, N)
-        C_heads = torch.stack([proj(x_conv) for proj in self.C_proj], dim=2)  # (B, T, P, N)
+        B_heads = self.B_proj(x_conv).view(B, T, P, N)
+        C_heads = self.C_proj(x_conv).view(B, T, P, N)
 
         dt_e = dt[:, :, :, None, None]                          # (B, T, D, 1, 1)
         dA = torch.exp(A[None, None] * dt_e)                    # (B, T, D, P, N)
-        dB = dt_e * B_heads[:, :, None, :, :]                   # (B, T, D, P, N)
+        dBu = dt_e * B_heads[:, :, None, :, :] * x_conv[:, :, :, None, None]
 
-        h = x.new_zeros(B, D, P, N)
-        y = x.new_zeros(B, T, D)
-        for t in range(T):
-            h = h * dA[:, t] + x_conv[:, t, :, None, None] * dB[:, t]
-            y_heads = (h * C_heads[:, t].unsqueeze(1)).sum(-1)  # (B, D, P)
-            y[:, t] = (y_heads * self.head_mix[None]).sum(-1)   # (B, D)
-        y = y + x_conv * self.D[None, None, :]
+        h = parallel_scan(dA, dBu)                              # (B, T, D, P, N)
+        y_heads = (h * C_heads[:, :, None, :, :]).sum(-1)        # (B, T, D, P)
+        y = (y_heads * self.head_mix).sum(-1)                    # (B, T, D)
+
+        y = y + x_conv * self.D
         y = y * F.silu(z)
         return self.out_proj(y)
 
@@ -75,8 +71,13 @@ class MambaMultiHeadBlock(nn.Module):
         self.ssm = SelectiveSSM(d_model, d_state, d_conv, n_heads)
         self.drop = nn.Dropout(dropout)
 
-    def forward(self, x):
+    def _forward(self, x):
         return x + self.drop(self.ssm(self.norm(x)))
+
+    def forward(self, x):
+        if self.training:
+            return ckpt.checkpoint(self._forward, x, use_reentrant=False)
+        return self._forward(x)
 
 
 class MambaMultiHeadLM(nn.Module):
