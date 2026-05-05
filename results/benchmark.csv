@@ -1,0 +1,6 @@
+model,val_ppl,test_ppl,params_M
+transformer_decoder,645.9,652.9,5.93
+encoder_decoder,686.02,689.49,6.08
+lstm,497.22,506.28,5.74
+mamba,207.29,214.61,5.96
+mamba_multihead,227.95,233.4,5.76
