@@ -3,6 +3,7 @@ import os
 
 import torch
 import torch.nn as nn
+import wandb
 import yaml
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -41,16 +42,28 @@ def train_model(cfg, vocab_size, train_loader, val_loader, device, epochs=20, lr
     ckpt_path = f"checkpoints/{cfg['model']}_best.pt"
     best_ppl = float("inf")
 
+    width = cfg.get("d_model", cfg.get("embed_dim", "na"))
+    wandb_mode = "online" if os.environ.get("WANDB_API_KEY") else "offline"
+    wandb.init(
+        project="archplexbench",
+        name=f"{cfg['model']}_{width}d",
+        config=cfg,
+        mode=wandb_mode,
+        reinit=True,
+    )
+
     for epoch in range(1, epochs + 1):
         train_loss = _train_epoch(model, train_loader, optimizer, criterion, device, max_grad_norm=1.0)
         val_ppl = compute_perplexity(model, val_loader, device)
         scheduler.step()
         print(f"  Epoch {epoch:3d}/{epochs} | loss={train_loss:.4f} | val_ppl={val_ppl:.2f}")
+        wandb.log({"epoch": epoch, "train_loss": train_loss, "val_ppl": val_ppl})
 
         if val_ppl < best_ppl:
             best_ppl = val_ppl
             torch.save(model.state_dict(), ckpt_path)
 
+    wandb.finish()
     model.load_state_dict(torch.load(ckpt_path, map_location=device))
     return model, best_ppl
 

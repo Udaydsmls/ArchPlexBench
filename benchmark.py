@@ -4,6 +4,7 @@ import os
 import matplotlib.pyplot as plt
 import pandas as pd
 import torch
+import wandb
 import yaml
 
 from data.dataset import get_dataloaders, get_tokenizer
@@ -55,17 +56,21 @@ def run_benchmark(epochs=20, lr=3e-4, batch_size=32, seq_len=256):
 
         print(f"{'='*50}")
         print(f"Model: {cfg['model'].upper()}")
-        model, val_ppl = train_model(cfg, vocab_size, train_loader, val_loader, device, epochs, lr)
+        try:
+            model, val_ppl = train_model(cfg, vocab_size, train_loader, val_loader, device, epochs, lr)
 
-        test_ppl = compute_perplexity(model, test_loader, device)
-        n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        results.append({
-            "model": cfg["model"],
-            "val_ppl": round(val_ppl, 2),
-            "test_ppl": round(test_ppl, 2),
-            "params_M": round(n_params / 1e6, 2),
-        })
-        print(f"  Test PPL: {test_ppl:.2f}\n")
+            test_ppl = compute_perplexity(model, test_loader, device)
+            n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            results.append({
+                "model": cfg["model"],
+                "val_ppl": round(val_ppl, 2),
+                "test_ppl": round(test_ppl, 2),
+                "params_M": round(n_params / 1e6, 2),
+            })
+            print(f"  Test PPL: {test_ppl:.2f}\n")
+        finally:
+            if wandb.run is not None:
+                wandb.finish()
 
     df = pd.DataFrame(results)
     os.makedirs("results", exist_ok=True)

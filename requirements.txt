@@ -6,3 +6,7 @@ causal-conv1d>=1.2.0
 pyyaml>=6.0
 pandas>=2.0.0
 matplotlib>=3.7.0
+wandb>=0.16.0
+onnx>=1.15.0
+onnxruntime>=1.17.0
+hypothesis>=6.100.0
