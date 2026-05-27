@@ -113,6 +113,48 @@ For a quick sanity check, drop `--epochs 3`.
 
 ---
 
+## W&B experiment tracking
+
+Every training run logs `train_loss` and `val_ppl` per epoch to [Weights & Biases](https://wandb.ai) under the project `archplexbench`. Set your API key to get online logging:
+
+```bash
+cp .env.example .env
+# fill in WANDB_API_KEY in .env
+```
+
+Without the key, runs are logged in offline mode to `./wandb/` and can be synced later with `wandb sync`.
+
+---
+
+## ONNX export
+
+After training, the Mamba model can be exported to ONNX and quantized to INT8 for deployment:
+
+```bash
+# export (opset 17, dynamic batch and seq_len)
+python export_onnx.py --checkpoint checkpoints/mamba_best.pt --output mamba.onnx
+
+# sanity-check against the original PyTorch weights (exits 1 on mismatch)
+python verify_onnx.py --onnx mamba.onnx --checkpoint checkpoints/mamba_best.pt
+
+# INT8 weight quantization — no calibration data needed
+python onnx_quantize.py --input mamba.onnx --output mamba_quantized.onnx
+```
+
+---
+
+## Tests
+
+Property-based tests for the parallel prefix scan:
+
+```bash
+pytest tests/test_scan.py -v
+```
+
+Hypothesis generates up to 200 random `(batch, seq_len, d_model, d_state)` combinations and checks three properties: output matches the naive sequential recurrence, zero input gives zero output, and `A=1` reduces to a cumulative sum.
+
+---
+
 ## Project structure
 
 ```
@@ -129,12 +171,18 @@ ArchPlexBench/
 ├── data/
 │   └── dataset.py                    # WikiText-2 loading and tokenisation
 ├── configs/                          # one YAML per model, ~6 M params each
+├── tests/
+│   └── test_scan.py                  # Hypothesis property tests for parallel_scan
 ├── train.py                          # shared training loop
 ├── evaluate.py                       # perplexity computation
 ├── benchmark.py                      # orchestrates all models, plots results
+├── export_onnx.py                    # export Mamba checkpoint to ONNX opset 17
+├── verify_onnx.py                    # diff ONNX output vs PyTorch within 1e-4
+├── onnx_quantize.py                  # INT8 dynamic quantization
+├── .env.example                      # W&B API key template
 ├── results/
-│   ├── benchmark.csv                 # final table
-│   └── comparison.png                # bar charts (PPL, params)
+│   ├── benchmark.csv                 # final numbers
+│   └── comparison.png                # bar charts
 ├── run_colab.ipynb                   # one-click Colab notebook
 └── requirements.txt
 ```
@@ -161,12 +209,16 @@ dropout: 0.1
 ## Requirements
 
 ```
-torch >= 2.0      # 2.1+ recommended for torch.compile + checkpoint composition
+torch >= 2.0         # 2.1+ recommended for torch.compile + checkpoint composition
 transformers >= 4.35
 datasets >= 2.14
 pyyaml >= 6.0
 pandas >= 2.0
 matplotlib >= 3.7
+wandb >= 0.16        # offline mode works without an API key
+onnx >= 1.15         # ONNX export
+onnxruntime >= 1.17  # ONNX inference and INT8 quantization
+hypothesis >= 6.100  # property-based tests
 ```
 
 ---
